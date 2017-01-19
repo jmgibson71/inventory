@@ -125,6 +125,9 @@ class MysqlCreateMainTable:
     def update_with_hash(self):
         return "UPDATE inv_rough SET file_hash=%s, hashed=1 WHERE id=%s"
 
+    def update_with_examined(self):
+        return "UPDATE inv_rough SET hashed=2 WHERE id=%s"
+
     def add_full_text(self):
         return "ALTER TABLE inv_rough ADD FULLTEXT INDEX 'FullText' (`file_path` ASC, `file_hash` ASC)"
 

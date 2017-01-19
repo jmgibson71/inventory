@@ -9,6 +9,7 @@ import databases.TableConfig as cfg
 import classes.SampleHash as shash
 import mysql.connector.errors
 from classes.ProcessPackage import InventoryChunk as IC
+from classes.LocalLogger import HoldingsLogger
 
 
 def arg_parse():
@@ -118,13 +119,13 @@ def table_setup(config):
 
 
 if __name__ == "__main__":
-    logging.basicConfig(filename='holdings.log', level=logging.DEBUG)
-    logger = logging.getLogger()
     args = arg_parse()
     inv_path = args.inventory_path
     if args.db_location is not None:
         db_location = PTH(args.db_location, inv_path._parts[-1] + ".db")
     db_name = args.database_name
+    HoldingsLogger(db_name)
+    logger = logging.getLogger()
     excludes = []
 
     if args.excluded_paths:

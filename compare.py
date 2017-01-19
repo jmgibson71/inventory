@@ -3,12 +3,16 @@ import databases.PyMysqlGen as msql
 import os
 import argparse
 import logging
+import databases.TableConfig as cfg
+from classes.LocalLogger import HoldingsLogger
+from classes.LocalLogger import ReportHandler
+from time import gmtime, strftime
+from hurry.filesize import size
 
 
 def arg_parse():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--compare-path", help="The path that you would like to compare against an inventory db."
-                                                 , required=True)
+    parser.add_argument("--compare-path", help="The path that you would like to compare against an inventory db.")
     parser.add_argument("--compare-db", help="The name of the database you will be comparing against. If you do not "
                                              "know the options use the -l ")
     parser.add_argument("-l", action='store_true', help="List the available databases.")
@@ -40,12 +44,8 @@ def show_db_options(dbs):
 
 
 def build_logger():
-    # set up logging to file - see previous section for more details
-    logging.basicConfig(level=logging.DEBUG, filename='compare.log', filemode='w')
-    # define a Handler which writes INFO messages or higher to the sys.stderr
-    console = logging.StreamHandler()
-    console.setLevel(logging.INFO)
-    logging.getLogger('').addHandler(console)
+    name = "holdings_{}.log".format(strftime("%Y-%m-%d_%H%M%S", gmtime()))
+    HoldingsLogger(name, 'a')
 
 
 class CompareSourceToDB:
@@ -67,6 +67,57 @@ class CompareSourceToDB:
         self.current_fn = None
         self.matches_log = None
         self.unique_log = None
+        self.match_size = 0
+        self.mark_query = cfg.MysqlCreateMainTable().update_with_examined()
+        rep_name = "{}_{}.log".format(self.matches_log, strftime("%Y-%m-%d_%H%M%S", gmtime()))
+        self.report = ReportHandler(rep_name)
+
+    def compare_from_db(self):
+        conn = self.source.get_connector()
+        cur = conn.cursor()
+        x = 0
+        while True:
+            query = "SELECT * FROM inv_rough WHERE hashed = 1 LIMIT 50"
+            cur.execute(query)
+            if cur.rowcount == 0:
+                break
+            for row in cur.fetchall():
+                if row[1] == 'Thumbs.db' or row[1] == 'bagit.txt':
+                    self.mark_as_checked(row[0])
+                    continue
+                print("Checking: {} ({})".format(row[0], row[2]))
+                self.current_fn = row[2]
+                hash = row[4]
+                self.compare_hash(hash)
+        self.write_stats()
+
+    def write_stats(self):
+        name = "{}_{}.log".format("stats", strftime("%Y-%m-%d_%H%M%S", gmtime()))
+        rh = ReportHandler(name)
+        fh = rh.get_file_handle("w")
+        fh.write("{} of duplicate data found.\n".format(size(self.match_size)))
+        fh.close()
+
+    def mark_as_checked(self, id):
+        conn = self.source.get_connector()
+        cur = conn.cursor()
+        cur.execute(self.mark_query, id)
+        cur.close()
+
+    def compare_hash(self, hash):
+        conn = self.source.get_connector()
+        cur = conn.cursor()
+        query = "SELECT * from inv_rough where file_hash = '{}'".format(hash)
+        cur.execute(query)
+        if self.is_unique(cur):
+            # mark as checked
+            self.mark_as_checked(cur.fetchone()[0])
+            pass
+        else:
+            self.add_report_lines_for_same(cur)
+            if len(self.match_buffer) == 10:
+                self.write_report_lines()
+                self.match_buffer = {}
 
     def file_to_compare(self, f):
         """
@@ -93,7 +144,7 @@ class CompareSourceToDB:
                 # Log Matches
                 self.add_report_lines(cur)
                 if len(self.match_buffer) == 100:
-                    self.write_report_line()
+                    self.write_report_lines()
                     self.match_buffer = {}
         except CompareError as e:
             self.logger.error("{}: {}".format(f, e))
@@ -109,8 +160,8 @@ class CompareSourceToDB:
                 break
         return common_path, compare[p:], match[p:]
 
-    def write_report_line(self):
-        compare_rep = open(self.matches_log, "a")
+    def write_report_lines(self):
+        compare_rep = self.report.get_file_handle("w")
         for file, matches in self.match_buffer.items():
             compare_rep.write(file + "\n")
             for m in matches:
@@ -135,6 +186,34 @@ class CompareSourceToDB:
         for row in cur.fetchall():
             tup = self.get_common_path(self.current_fn, row)
             lines.append(tup[2])
+        self.match_buffer[self.current_fn] = lines
+
+    def add_report_lines_for_same(self, cur):
+        """
+        :type cur: pymysql.cursor
+        :param cur:
+        :return:
+        """
+        lines = []
+        common_path = None
+        first = True
+        parent = None
+        for row in cur.fetchall():
+            if first:
+                parent = row
+                first = False
+                continue
+            tup = self.get_common_path(self.current_fn, row)
+            if tup[0] != '':
+                common_path = tup[0]
+            lines.append(tup[2])
+            self.match_size += row[3]
+            # Set the matched items to examined since we now have a match record
+            self.mark_as_checked(row[0])
+        # Since we ignored the first result we need to mark it as viewed.
+        self.mark_as_checked(parent[0])
+        if common_path is not None:
+            lines.insert(0, common_path)
         self.match_buffer[self.current_fn] = lines
 
     def is_unique(self, cur):
@@ -177,16 +256,21 @@ if __name__ == "__main__":
         args.compare_db = show_db_options(dbs)
 
     compare = CompareSourceToDB(args.compare_db)
-    compare.matches_log = str(args.compare_path).replace(os.sep, "_") + "_match.txt"
-    compare.unique_log = str(args.compare_path).replace(os.sep, "_") + "_unique.txt"
     if args.s:
+        compare.matches_log = "{}_matches.txt".format(args.compare_db)
+        compare.unique_log = "{}_unique.txt".format(args.compare_db)
         compare.compare_same_source = True
-    for dirpath, _, files in os.walk(args.compare_path):
-        for f in files:
-            if f == "Thumbs.db":
-                continue
-            if f == "bagit.txt":
-                continue
-            compare.file_to_compare(os.path.join(dirpath, f))
-    compare.write_unique_lines()
-    compare.write_report_line()
+        compare.compare_from_db()
+        compare.write_report_lines()
+    else:
+        compare.matches_log = str(args.compare_path).replace(os.sep, "_") + "_match.txt"
+        compare.unique_log = str(args.compare_path).replace(os.sep, "_") + "_unique.txt"
+        for dirpath, _, files in os.walk(args.compare_path):
+            for f in files:
+                if f == "Thumbs.db":
+                    continue
+                if f == "bagit.txt":
+                    continue
+                compare.file_to_compare(os.path.join(dirpath, f))
+        compare.write_unique_lines()
+        compare.write_report_lines()
