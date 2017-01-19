@@ -69,8 +69,16 @@ class CompareSourceToDB:
         self.unique_log = None
         self.match_size = 0
         self.mark_query = cfg.MysqlCreateMainTable().update_with_examined()
-        rep_name = "{}_{}.log".format(self.matches_log, strftime("%Y-%m-%d_%H%M%S", gmtime()))
-        self.report = ReportHandler(rep_name)
+        self.match_rep = None
+        self.unique_rep = None
+
+    def set_matches_name(self, nme):
+        self.matches_log = "{}_{}.log".format(nme, strftime("%Y-%m-%d_%H%M%S", gmtime()))
+        self.match_rep = ReportHandler(self.matches_log)
+
+    def set_unique_name(self, nme):
+        self.unique_log = "{}_{}.log".format(nme, strftime("%Y-%m-%d_%H%M%S", gmtime()))
+        self.unique_rep = ReportHandler(self.unique_log)
 
     def compare_from_db(self):
         conn = self.source.get_connector()
@@ -87,8 +95,7 @@ class CompareSourceToDB:
                     continue
                 print("Checking: {} ({})".format(row[0], row[2]))
                 self.current_fn = row[2]
-                hash = row[4]
-                self.compare_hash(hash)
+                self.compare_hash(row[4])   # row[4] is the hash value
         self.write_stats()
 
     def write_stats(self):
@@ -104,10 +111,10 @@ class CompareSourceToDB:
         cur.execute(self.mark_query, id)
         cur.close()
 
-    def compare_hash(self, hash):
+    def compare_hash(self, hsh):
         conn = self.source.get_connector()
         cur = conn.cursor()
-        query = "SELECT * from inv_rough where file_hash = '{}'".format(hash)
+        query = "SELECT * from inv_rough where file_hash = '{}'".format(hsh)
         cur.execute(query)
         if self.is_unique(cur):
             # mark as checked
@@ -161,7 +168,7 @@ class CompareSourceToDB:
         return common_path, compare[p:], match[p:]
 
     def write_report_lines(self):
-        compare_rep = self.report.get_file_handle("w")
+        compare_rep = self.match_rep.get_file_handle("w")
         for file, matches in self.match_buffer.items():
             compare_rep.write(file + "\n")
             for m in matches:
@@ -257,8 +264,8 @@ if __name__ == "__main__":
 
     compare = CompareSourceToDB(args.compare_db)
     if args.s:
-        compare.matches_log = "{}_matches.txt".format(args.compare_db)
-        compare.unique_log = "{}_unique.txt".format(args.compare_db)
+        compare.set_matches_name("{}_match".format(args.compare_db))
+        compare.set_unique_name("{}_unique".format(args.compare_db))
         compare.compare_same_source = True
         compare.compare_from_db()
         compare.write_report_lines()
