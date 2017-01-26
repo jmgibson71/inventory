@@ -10,42 +10,42 @@ from time import gmtime, strftime
 from hurry.filesize import size
 
 
-def arg_parse():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--compare-path", help="The path that you would like to compare against an inventory db.")
-    parser.add_argument("--compare-db", help="The name of the database you will be comparing against. If you do not "
-                                             "know the options use the -l ")
-    parser.add_argument("-l", action='store_true', help="List the available databases.")
+class Configurations:
+    def __init__(self):
+        super().__init__()
 
-    parser.add_argument("-s", action='store_true', help="If you are comparing the same source " \
-                                                                          "as the indexed database add this flag")
+    def arg_parse(self):
+        parser = argparse.ArgumentParser()
+        parser.add_argument("--compare-path", help="The path that you would like to compare against an inventory db.")
+        parser.add_argument("--compare-db", help="The name of the database you will be comparing against. If you do not "
+                                                 "know the options use the -l ")
+        parser.add_argument("-l", action='store_true', help="List the available databases.")
 
-    return parser.parse_args()
+        parser.add_argument("-s", action='store_true', help="If you are comparing the same source " \
+                                                                              "as the indexed database add this flag")
+        return parser.parse_args()
 
+    def list_databases(self):
+        conn = msql.PyMySqlConnector().get_connector()
+        cur = conn.cursor()
+        query = "SELECT TABLE_SCHEMA from information_schema.tables where TABLE_NAME = 'inv_rough'"
+        cur.execute(query)
+        count = 1
+        table = {}
+        for line in cur.fetchall():
+            table[count] = line[0]
+        return table
 
-def list_databases():
-    conn = msql.PyMySqlConnector().get_connector()
-    cur = conn.cursor()
-    query = "SELECT TABLE_SCHEMA from information_schema.tables where TABLE_NAME = 'inv_rough'"
-    cur.execute(query)
-    count = 1
-    table = {}
-    for line in cur.fetchall():
-        table[count] = line[0]
-    return table
+    def show_db_options(self, dbs):
+        print("Here are the available Databases to match against:")
+        for o, name in dbs.items():
+            print("{}\t{}".format(o, name))
+        num = input("Enter the number of the Database you want to use: ")
+        return dbs.get(int(num))
 
-
-def show_db_options(dbs):
-    print("Here are the available Databases to match against:")
-    for o, name in dbs.items():
-        print("{}\t{}".format(o, name))
-    num = input("Enter the number of the Database you want to use: ")
-    return dbs.get(int(num))
-
-
-def build_logger():
-    name = "holdings_{}.log".format(strftime("%Y-%m-%d_%H%M%S", gmtime()))
-    HoldingsLogger(name, 'a')
+    def build_logger(self):
+        name = "holdings.log"
+        HoldingsLogger(name, 'a')
 
 
 class CompareSourceToDB:
@@ -85,17 +85,18 @@ class CompareSourceToDB:
         cur = conn.cursor()
         x = 0
         while True:
-            query = "SELECT * FROM inv_rough WHERE hashed = 1 LIMIT 50"
+            query = "SELECT * FROM inv_rough WHERE hashed = 1 LIMIT 1"
             cur.execute(query)
             if cur.rowcount == 0:
                 break
-            for row in cur.fetchall():
-                if row[1] == 'Thumbs.db' or row[1] == 'bagit.txt':
-                    self.mark_as_checked(row[0])
-                    continue
-                print("Checking: {} ({})".format(row[0], row[2]))
-                self.current_fn = row[2]
-                self.compare_hash(row[4])   # row[4] is the hash value
+            row = cur.fetchone()
+            print("Checking: {} ({})".format(row[0], str(row[2]).encode("utf-8")))
+            self.mark_as_checked(row[0])
+            if row[1] == 'Thumbs.db' or row[1] == 'bagit.txt' or row[3] == 0:
+                self.mark_as_checked(row[0])
+                continue
+            self.current_fn = row[2]
+            self.compare_hash(row[4])   # row[4] is the hash value
         self.write_stats()
 
     def write_stats(self):
@@ -114,14 +115,14 @@ class CompareSourceToDB:
     def compare_hash(self, hsh):
         conn = self.source.get_connector()
         cur = conn.cursor()
-        query = "SELECT * from inv_rough where file_hash = '{}'".format(hsh)
+        # Make sure that you only select items that have not matched and been reported before.
+        query = "SELECT * from inv_rough where file_hash = '{}' and hashed = 1".format(hsh)
         cur.execute(query)
         if self.is_unique(cur):
-            # mark as checked
-            self.mark_as_checked(cur.fetchone()[0])
+            # Already checked
             pass
         else:
-            self.add_report_lines_for_same(cur)
+            self.add_report_lines(cur)
             if len(self.match_buffer) == 10:
                 self.write_report_lines()
                 self.match_buffer = {}
@@ -139,7 +140,7 @@ class CompareSourceToDB:
         comp = my_hash.hash()
         conn = self.source.get_connector()
         cur = conn.cursor()
-        query = "SELECT * from inv_rough where file_hash LIKE '{}'".format(comp)
+        query = "SELECT * from inv_rough where file_hash = '{}' and hashed = 1".format(comp)
         cur.execute(query)
         try:
             if self.is_unique(cur):
@@ -158,21 +159,39 @@ class CompareSourceToDB:
 
     @staticmethod
     def get_common_path(comp, mtch):
+        """
+        get_common_path is a reporting helper function that compares two file paths to find the parts of the path
+        that are identical to the matched file. The function returns a tuple of lists 0: is the common path,
+        1: is the path in list form from the point of divergence, 2: is the same
+        :param comp: str
+        :param mtch: str
+        :return: tuple
+        """
         common_path = ''
         compare = comp.split(os.sep)
         match = mtch[2].split(os.sep)
         for p, x in enumerate(comp.split(os.sep)):
-            if x not in match:
+            if not p < (len(compare) - 1):
+                common_path = match[0:p-1]
+                break
+            if x not in match or not p < (len(compare) - 1):
                 common_path = match[0:p]
                 break
         return common_path, compare[p:], match[p:]
 
     def write_report_lines(self):
-        compare_rep = self.match_rep.get_file_handle("w")
+        """
+        Takes the matches in the match buffer and writes to the log.  The match buffer contains a dictionary the key of
+        which is the matched file, and contains another dictionary, of compares.
+        :return:
+        """
+        compare_rep = self.match_rep.get_file_handle("a")
         for file, matches in self.match_buffer.items():
             compare_rep.write(file + "\n")
-            for m in matches:
-                compare_rep.write("\t{}\n".format(m))
+            for common, matches in matches.items():
+                compare_rep.write("\tCP:\t{}\n".format(common))
+                for m in matches:
+                    compare_rep.write("\t\t{}\n".format(m))
             compare_rep.write("\n\n")
         compare_rep.close()
 
@@ -185,67 +204,36 @@ class CompareSourceToDB:
 
     def add_report_lines(self, cur):
         """
+        Takes an sql result set and sorts into a dictionary of common paths. The key of the dictionary is a path fragment
+        that is the common path of the matches to the matched file.
         :type cur: pymysql.cursor
         :param cur:
-        :return:
+        :return dict:
         """
-        lines = []
+        common_paths = {}
         for row in cur.fetchall():
-            tup = self.get_common_path(self.current_fn, row)
-            lines.append(tup[2])
-        self.match_buffer[self.current_fn] = lines
-
-    def add_report_lines_for_same(self, cur):
-        """
-        :type cur: pymysql.cursor
-        :param cur:
-        :return:
-        """
-        lines = []
-        common_path = None
-        first = True
-        parent = None
-        for row in cur.fetchall():
-            if first:
-                parent = row
-                first = False
-                continue
-            tup = self.get_common_path(self.current_fn, row)
-            if tup[0] != '':
-                common_path = tup[0]
-            lines.append(tup[2])
-            self.match_size += row[3]
-            # Set the matched items to examined since we now have a match record
             self.mark_as_checked(row[0])
-        # Since we ignored the first result we need to mark it as viewed.
-        self.mark_as_checked(parent[0])
-        if common_path is not None:
-            lines.insert(0, common_path)
-        self.match_buffer[self.current_fn] = lines
+            tup = self.get_common_path(self.current_fn, row)
+            if tup[0] == '':  # There is no common path this shouldn't happen on a same source comparison
+                common_paths['No Common Path'].append(tup[2])
+                continue
+            if not os.path.join(*tup[0]) in common_paths:  # This
+                common_paths[os.path.join(*tup[0])] = []
+            common_paths[os.path.join(*tup[0])].append(tup[2])
+        self.match_buffer[self.current_fn] = common_paths
 
+    @staticmethod
     def is_unique(self, cur):
         """
+        Helper function. Potetntially refactor
         :type cur: pymysql.cursor
         :param cur:
         :return Boolean:
         """
-        if self.compare_same_source and cur.rowcount == 0:
-            # This is some sort of error.  Most likely the file was indexed and then removed before the compare
-            # process was run
-            raise CompareError("Results are 0 on a compare same source process.  Most likely the db you are "
-                               "comparing is out of date.")
-        if self.compare_same_source and cur.rowcount == 1:
+        if cur.rowcount == 0:
             # No Match
             return True
-        if self.compare_same_source and cur.rowcount > 1:
-            # Match
-            return False
-
-        if not self.compare_same_source and cur.rowcount == 0:
-            # No Match
-            return True
-
-        if not self.compare_same_source and cur.rowcount > 0:
+        if cur.rowcount > 0:
             # Match
             return False
 
@@ -254,13 +242,14 @@ class CompareError(Exception):
     pass
 
 if __name__ == "__main__":
-    build_logger()
+    configure = Configurations()
+    configure.build_logger()
     logger = logging.getLogger("main")
-    args = arg_parse()
+    args = configure.arg_parse()
 
     if args.l:
-        dbs = list_databases()
-        args.compare_db = show_db_options(dbs)
+        dbs = configure.list_databases()
+        args.compare_db = configure.show_db_options(dbs)
 
     compare = CompareSourceToDB(args.compare_db)
     if args.s:

@@ -81,6 +81,7 @@ def get_excluded_dirs(fp):
 
 
 def setup_db(db_nm):
+    # TODO: move db config outside of application
     config = {
         'user': 'jeremy',
         'password': 'C12mp3b1',
