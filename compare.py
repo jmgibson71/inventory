@@ -4,6 +4,7 @@ import os
 import argparse
 import logging
 import databases.TableConfig as cfg
+import configparser
 from classes.LocalLogger import HoldingsLogger
 from classes.LocalLogger import ReportHandler
 from time import gmtime, strftime
@@ -13,6 +14,7 @@ from hurry.filesize import size
 class Configurations:
     def __init__(self):
         super().__init__()
+        self.config = None
 
     def arg_parse(self):
         parser = argparse.ArgumentParser()
@@ -26,7 +28,14 @@ class Configurations:
         return parser.parse_args()
 
     def list_databases(self):
-        conn = msql.PyMySqlConnector().get_connector()
+        configure = configparser.ConfigParser()
+        configure.read(os.path.join(os.getcwd(), "db_config.cfg"))
+        self.config = {'user': configure['DATABASE']['USER'],
+                  'password': configure['DATABASE']['PASS'],
+                  'host': configure['DATABASE']['HOST'],
+                  'database': 'mysql'
+                  }
+        conn = msql.PyMySqlConnector(self.config).get_connector()
         cur = conn.cursor()
         query = "SELECT TABLE_SCHEMA from information_schema.tables where TABLE_NAME = 'inv_rough'"
         cur.execute(query)
@@ -49,16 +58,13 @@ class Configurations:
 
 
 class CompareSourceToDB:
-    def __init__(self, source=None):
+    def __init__(self, config):
         """
         :type source : str
         :param database identifier:
         """
         self.logger = logging.getLogger("CompareSource")
-        if source is None:
-            self.source = msql.PyMySqlConnector()
-        else:
-            self.source = msql.PyMySqlConnector(source)
+        self.source = msql.PyMySqlConnector(config)
 
         self.compare_same_source = False
         self.unique_files = []
@@ -223,7 +229,7 @@ class CompareSourceToDB:
         self.match_buffer[self.current_fn] = common_paths
 
     @staticmethod
-    def is_unique(self, cur):
+    def is_unique(cur):
         """
         Helper function. Potetntially refactor
         :type cur: pymysql.cursor
@@ -250,8 +256,9 @@ if __name__ == "__main__":
     if args.l:
         dbs = configure.list_databases()
         args.compare_db = configure.show_db_options(dbs)
+        configure.config['database'] = args.compare_db
 
-    compare = CompareSourceToDB(args.compare_db)
+    compare = CompareSourceToDB(configure.config)
     if args.s:
         compare.set_matches_name("{}_match".format(args.compare_db))
         compare.set_unique_name("{}_unique".format(args.compare_db))

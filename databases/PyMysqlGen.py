@@ -1,22 +1,21 @@
 import pymysql
 
+
 class PyMySqlConnector:
 
-    def __init__(self, database='mysql'):
-        self.config = {
-            'user': 'jeremy',
-            'password': 'C12mp3b1',
-            'host': '127.0.0.1',
-            'database': database
-        }
+    def __init__(self, config):
+        self.config = config
         self._cnx = None  # type: pymysql.connections.Connection
-        self.database = database
 
     def database_exists(self):
-        self._cnx = self.get_connector()
-        cur = self._cnx.cursor()
-        cur.execute("SELECT SCHEMA_NAME FROM INFORMATION_SCHEMA.SCHEMATA WHERE SCHEMA_NAME = '{}'"
-                    .format(self.database))
+        try:
+            conn = pymysql.Connection(self.config)
+            self._cnx = self.get_connector()
+            cur = self._cnx.cursor()
+            cur.execute("SELECT SCHEMA_NAME FROM INFORMATION_SCHEMA.SCHEMATA WHERE SCHEMA_NAME = '{}'"
+                        .format(self.config['DATABASE']))
+        except pymysql.err.InternalError as e:
+            return False
         if cur.rowcount == 1:
             self._cnx.close()
             return True
