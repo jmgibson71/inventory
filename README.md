@@ -10,6 +10,7 @@ This config file should be structured like this replace the <> with your
 own values to connect to your instance of a mysql database:
 
 [DATABASE]
+
 USER=\<USER\>
 PASS=\<PASSWORD\>
 HOST=127.0.0.1
