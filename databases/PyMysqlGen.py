@@ -9,12 +9,14 @@ class PyMySqlConnector:
 
     def database_exists(self):
         try:
-            conn = pymysql.Connection(self.config)
+            conn = pymysql.connections.Connection(**self.config)
             self._cnx = self.get_connector()
             cur = self._cnx.cursor()
             cur.execute("SELECT SCHEMA_NAME FROM INFORMATION_SCHEMA.SCHEMATA WHERE SCHEMA_NAME = '{}'"
-                        .format(self.config['DATABASE']))
+                        .format(self.config['database']))
         except pymysql.err.InternalError as e:
+            return False
+        except TypeError as e:
             return False
         if cur.rowcount == 1:
             self._cnx.close()

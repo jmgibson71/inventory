@@ -10,7 +10,7 @@ class InventoryChunk:
         :param db_config:
         """
         self.config = db_config
-        self.pycon = pymy.PyMySqlConnector(db_config['database'])  # type : database.PyMysqlGen
+        self.pycon = pymy.PyMySqlConnector(db_config)  # type : database.PyMysqlGen
         self.pycur = None   # type : pymysql.cursors
         self.results = True
         self.count = 0

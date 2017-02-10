@@ -42,7 +42,7 @@ class Inventory:
         super().__init__()
 
     def first_walk(self, inv_path, db_config):
-        mt = msql.MySqlConnector(db_config)
+        mt = pymy.PyMySqlConnector(db_config)
         con = mt.get_connector()
 
         for dirpath, dirs, files in os.walk(inv_path, topdown=True):
@@ -54,13 +54,13 @@ class Inventory:
                 fob = MysqlFileObj.FileMap(full_path)
                 query = cfg.MysqlCreateMainTable().insert_into_table()
                 cur = con.cursor()
-                cur.execute(query, (fob.file_name, fob.file_path, fob.file_size))
+                cur.execute(query, (fob.file_name.encode('utf-8'), fob.file_path, fob.file_size))
                 print("{}:{}".format(cur.lastrowid, fob.file_path.encode("utf-8")))
                 con.commit()
         con.close()
 
     def second_walk(self, db_config):
-        mt = msql.MySqlConnector(db_config)
+        mt = pymy.PyMySqlConnector(db_config)
         con = mt.get_connector()
         ic = IC(db_config)
         while ic.results:
@@ -116,7 +116,7 @@ class Inventory:
                 return None
 
     def table_setup(self, config):
-        pmycon = pymy.PyMySqlConnector(config['database'])
+        pmycon = pymy.PyMySqlConnector(config)
         con = pmycon.get_connector()
         cur = con.cursor()
         cur.execute("SHOW TABLES LIKE 'inv_rough'")
